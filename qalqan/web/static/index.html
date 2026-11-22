@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QALQAN Voice — Real-Time Voice Deepfake Detector</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="bg-mesh" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand-pill">
+        <span class="dot-live"></span>
+        <span data-i18n="badge">DEFENSE TECH · КИБЕРБЕЗОПАСНОСТЬ</span>
+      </div>
+      <div class="topbar-controls">
+        <div class="lang-switch" role="group" aria-label="Language">
+          <button class="lang-btn active" data-lang="ru">RU</button>
+          <button class="lang-btn" data-lang="kk">KZ</button>
+          <button class="lang-btn" data-lang="en">EN</button>
+        </div>
+        <button id="themeToggle" class="icon-btn" title="Toggle dark/light theme" aria-label="Toggle theme">◐</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- Left column: Pitch context, status & drag-drop upload -->
+    <section class="hero-col">
+      <h1 class="wordmark">QALQAN</h1>
+      <div class="wordmark-sub">Voice</div>
+      <p class="hero-desc" data-i18n="hero_desc">
+        Детектор поддельных голосов на казахском и русском. Проверяет звонок и голосовое сообщение в реальном времени по физике звука.
+      </p>
+
+      <blockquote class="hero-quote" data-i18n="hero_quote">
+        Слушаем не слова, а физику звука: микропаузы дыхания, резонанс голосового тракта и следы нейровокодеров в полосе 6–8 кГц.
+      </blockquote>
+
+      <div class="status-stack">
+        <div class="status-card">
+          <span class="status-tag tag-ok" id="healthTag">ONLINE</span>
+          <div class="status-body">
+            <div class="status-title" data-i18n="st_dash_title">Веб-дашборд и REST / WebSocket API</div>
+            <div class="status-sub" id="healthMeta">FastAPI · 16 kHz · подключение…</div>
+          </div>
+        </div>
+
+        <div class="status-card">
+          <span class="status-tag tag-ml" id="engineTag">DSP + LCNN</span>
+          <div class="status-body">
+            <div class="status-title" data-i18n="st_ml_title">Акустическая физика + PyTorch LCNN (RU / KZ)</div>
+            <div class="status-sub" data-i18n="st_ml_sub">LFCC 60-dim + анализ 6–8 кГц вокодера и джиттера тона</div>
+          </div>
+        </div>
+
+        <label class="dropzone" id="dropzone" for="audioFileInput">
+          <input type="file" id="audioFileInput" accept="audio/*,.wav,.ogg,.oga,.mp3,.webm,.m4a,.flac" hidden />
+          <div class="dropzone-icon">↑</div>
+          <div class="dropzone-text">
+            <strong data-i18n="drop_title">Проверить аудио или голосовое (.ogg / .wav / .mp3)</strong>
+            <span data-i18n="drop_sub">Перетащите файл сюда или нажмите для выбора (до 25 МБ)</span>
+          </div>
+        </label>
+      </div>
+    </section>
+
+    <!-- Right column: Signature Live Verification Monitor (Slide 6) -->
+    <section class="monitor-col">
+      <div class="monitor-card" id="monitorCard">
+        <div class="monitor-header">
+          <div class="live-indicator" id="liveIndicator">
+            <span class="live-dot"></span>
+            <span id="liveLabel">LIVE</span>
+          </div>
+          <div class="monitor-meta">
+            <span class="meta-chip" id="sourceChip">M · микрофон</span>
+            <span class="meta-chip mono" id="latencyChip">— ms</span>
+          </div>
+        </div>
+
+        <!-- Real Spectrogram Canvas -->
+        <div class="spec-wrap">
+          <canvas id="specCanvas" width="640" height="170"></canvas>
+          <div class="spec-axis">
+            <span>8 kHz</span>
+            <span>4 kHz</span>
+            <span>0 Hz</span>
+          </div>
+          <div class="spec-overlay" id="specOverlay" data-i18n="spec_idle">
+            Нажмите «Симуляция», включите микрофон (M) или загрузите голосовое
+          </div>
+        </div>
+
+        <!-- Optional quote banner for simulation / incoming call preview -->
+        <div class="quote-banner hidden" id="quoteBanner"></div>
+
+        <!-- Verdict Ring + Forensic Reasons -->
+        <div class="verdict-row">
+          <div class="ring-wrap">
+            <svg class="ring-svg" viewBox="0 0 120 120" aria-hidden="true">
+              <circle class="ring-track" cx="60" cy="60" r="50" />
+              <circle class="ring-progress" id="ringProgress" cx="60" cy="60" r="50" />
+            </svg>
+            <div class="ring-center">
+              <span class="ring-pct" id="ringPct">—</span>
+              <span class="ring-sub" data-i18n="prob_short">вероятность синтеза</span>
+            </div>
+          </div>
+
+          <div class="verdict-info">
+            <div class="verdict-title" id="verdictTitle" data-i18n="verdict_ready">ОЖИДАНИЕ АУДИО</div>
+            <ul class="reason-list" id="reasonList">
+              <li data-i18n="reason_idle">Система готова к проверке потока или файла в реальном времени</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- 4 Acoustic-Physics Meters -->
+        <div class="metrics-grid">
+          <div class="metric-item">
+            <div class="metric-head">
+              <span data-i18n="m_vocoder">Вокодер 6–8 кГц</span>
+              <span class="mono" id="valVocoder">—</span>
+            </div>
+            <div class="metric-bar"><div class="metric-fill" id="barVocoder"></div></div>
+          </div>
+          <div class="metric-item">
+            <div class="metric-head">
+              <span data-i18n="m_breath">Микропаузы дыхания</span>
+              <span class="mono" id="valBreath">—</span>
+            </div>
+            <div class="metric-bar"><div class="metric-fill" id="barBreath"></div></div>
+          </div>
+          <div class="metric-item">
+            <div class="metric-head">
+              <span data-i18n="m_resonance">Ровность резонанса</span>
+              <span class="mono" id="valResonance">—</span>
+            </div>
+            <div class="metric-bar"><div class="metric-fill" id="barResonance"></div></div>
+          </div>
+          <div class="metric-item">
+            <div class="metric-head">
+              <span data-i18n="m_flux">Спектр. поток</span>
+              <span class="mono" id="valFlux">—</span>
+            </div>
+            <div class="metric-bar"><div class="metric-fill" id="barFlux"></div></div>
+          </div>
+        </div>
+
+        <!-- History Log -->
+        <div class="history-section">
+          <div class="history-head">
+            <span data-i18n="history_title">История проверок</span>
+            <button id="clearHistoryBtn" class="text-btn" data-i18n="history_clear">Очистить</button>
+          </div>
+          <div class="history-list" id="historyList">
+            <div class="history-empty" data-i18n="history_empty">Пока нет проверок</div>
+          </div>
+        </div>
+
+        <!-- Action Controls -->
+        <div class="controls-row">
+          <button id="micBtn" class="ctrl-btn ctrl-primary">
+            <span>🎙</span>
+            <span id="micBtnText" data-i18n="btn_mic">Микрофон</span>
+          </button>
+          <button id="simSynthBtn" class="ctrl-btn ctrl-alert">
+            <span>▶</span>
+            <span data-i18n="btn_sim_synth">Симуляция: ИИ</span>
+          </button>
+          <button id="simLiveBtn" class="ctrl-btn ctrl-safe">
+            <span>✓</span>
+            <span data-i18n="btn_sim_live">Симуляция: Живой</span>
+          </button>
+        </div>
+
+        <div class="monitor-footer">
+          <span id="modeFoot">режим: готов</span>
+          <a href="/docs" target="_blank" rel="noopener">OpenAPI /docs ↗</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

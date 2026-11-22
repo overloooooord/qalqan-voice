@@ -1,0 +1,22 @@
+services:
+  qalqan-api:
+    build: .
+    container_name: qalqan-voice-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./models:/app/models
+    restart: unless-stopped
+
+  qalqan-bot:
+    build: .
+    container_name: qalqan-voice-bot
+    command: ["python", "-m", "qalqan.bot.telegram_bot"]
+    env_file:
+      - .env
+    volumes:
+      - ./models:/app/models
+    profiles: ["bot"]
+    restart: unless-stopped
