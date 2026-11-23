@@ -39,7 +39,23 @@ Modern voice cloning models require as little as **3 seconds of audio** and cost
 - **4 Acoustic-Physics Forensics:** 6–8 kHz vocoder banding, inter-phrase micro-breath & pause entropy, vocal-tract pitch jitter / formant smoothness, and spectral flux stationarity — with automatic narrowband codec adaptation for WhatsApp/telephony.
 - **Compact PyTorch `QalqanLCNN` (Light CNN + MFM activations)** designed for low-latency CPU inference and **air-gapped on-premise** deployment (with ONNX export).
 
-> 📄 **Pitch Deck:** [`docs/QALQAN_pitch.pdf`](docs/QALQAN_pitch.pdf) · **Architecture:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · **Demo Script:** [`docs/PITCH_SCRIPT.md`](docs/PITCH_SCRIPT.md)
+> 📄 **Pitch Deck:** [`docs/QALQAN_pitch.pdf`](docs/QALQAN_pitch.pdf) · **Architecture:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · **Benchmarks:** [`docs/BENCHMARK.md`](docs/BENCHMARK.md) · **Venture Brief:** [`docs/VENTURE_BRIEF.md`](docs/VENTURE_BRIEF.md)
+
+---
+
+## Reproducible CPU Benchmark (5 Channels)
+
+Measured on a single CPU core (`python -m scripts.benchmark --samples-per-class 25`, 250 clips × 4.0s, **no GPU**, real FFmpeg Opus transcodes):
+
+| Channel | p50 Latency | p95 Latency | Real-Time Factor | Speed vs. Real-Time |
+|---|---:|---:|---:|---:|
+| Clean Wideband (16 kHz WAV) | **24.1 ms** | 31.4 ms | `0.0060` | **166×** |
+| Telegram Voice (`.ogg` Opus 24 kbps) | **30.2 ms** | 49.8 ms | `0.0076` | **131×** |
+| WhatsApp Voice (`.ogg` Opus 16 kbps) | **27.0 ms** | 63.0 ms | `0.0067` | **149×** |
+| Noisy Street / Room (15 dB SNR) | **30.9 ms** | 48.0 ms | `0.0077` | **130×** |
+| Telephony Narrowband (8 kHz SIP) | **19.1 ms** | 23.0 ms | `0.0048` | **208×** |
+
+Full methodology & Kazakh/Russian blinded evaluation protocol: [`docs/BENCHMARK.md`](docs/BENCHMARK.md).
 
 ---
 
