@@ -124,6 +124,7 @@
   let analyser = null;
   let ws = null;
   let animFrameId = null;
+  let lastSpecMatrix = null;
 
   const $ = (id) => document.getElementById(id);
   const RING_CIRC = 2 * Math.PI * 50;
@@ -140,9 +141,21 @@
     $("micBtnText").textContent = isRecording ? t("btn_mic_stop") : t("btn_mic");
   }
 
-  // Color palette matching Slide 6 spectrogram (lavender -> indigo -> rose -> crimson)
+  // Adaptive spectrogram palette (light mode: Slide 6 lavender->indigo->crimson; dark mode: midnight->indigo->magenta->coral)
   function heatColor(v) {
     const x = Math.max(0, Math.min(1, v));
+    if (document.body.classList.contains("dark")) {
+      if (x < 0.35) {
+        const p = x / 0.35;
+        return [Math.round(14 + p * 60), Math.round(20 + p * 44), Math.round(46 + p * 120)];
+      }
+      if (x < 0.7) {
+        const p = (x - 0.35) / 0.35;
+        return [Math.round(74 + p * 138), Math.round(64 + p * 20), Math.round(166 + p * 36)];
+      }
+      const p = (x - 0.7) / 0.3;
+      return [Math.round(212 + p * 39), Math.round(84 + p * 29), Math.round(202 - p * 70)];
+    }
     if (x < 0.35) {
       const p = x / 0.35;
       const r = Math.round(234 - p * 96);
@@ -168,6 +181,7 @@
     const canvas = $("specCanvas");
     const ctx = canvas.getContext("2d");
     if (!matrix || !matrix.length || !matrix[0].length) return;
+    lastSpecMatrix = matrix;
 
     $("specOverlay").classList.add("hidden");
     const rows = matrix.length;
@@ -445,6 +459,9 @@
 
   $("themeToggle").addEventListener("click", () => {
     document.body.classList.toggle("dark");
+    if (lastSpecMatrix && !isRecording) {
+      renderSpectrogramMatrix(lastSpecMatrix);
+    }
   });
 
   $("simSynthBtn").addEventListener("click", () => runSimulation("synthetic"));

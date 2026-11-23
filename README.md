@@ -9,6 +9,25 @@
 ![PyTorch](https://img.shields.io/badge/PyTorch-LCNN%20%2B%20LFCC-ee4c2c)
 ![License: MIT](https://img.shields.io/badge/license-MIT-slate)
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/preview-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="docs/preview-light.png" />
+    <img src="docs/preview-light.png" alt="QALQAN Voice Live Web Dashboard Preview" width="100%" />
+  </picture>
+</p>
+
+<details>
+  <summary>📸 More previews (Light / Dark Dashboard &amp; Social Cover)</summary>
+  <p align="center">
+    <img src="docs/social-preview.png" alt="QALQAN Voice Social Preview Banner" width="100%" />
+  </p>
+  <p align="center">
+    <img src="docs/preview-light.png" alt="QALQAN Voice Light Theme" width="49%" />
+    <img src="docs/preview-dark.png" alt="QALQAN Voice Dark Defense Mode" width="49%" />
+  </p>
+</details>
+
 ---
 
 ## Why QALQAN Voice?
