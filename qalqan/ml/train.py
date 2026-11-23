@@ -21,12 +21,11 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
-from scipy.signal import butter, sosfilt
 from torch.utils.data import DataLoader, Dataset
 
 from qalqan.audio.features import extract_acoustic_features
 from qalqan.audio.loader import load_audio_file
-from qalqan.audio.synth_samples import generate_live_human_sample, generate_synthetic_voice_sample
+from qalqan.audio.synth_samples import bandpass_filter, generate_live_human_sample, generate_synthetic_voice_sample
 from qalqan.ml.model import QalqanLCNN, save_checkpoint
 
 SUPPORTED_EXTS = {".wav", ".ogg", ".oga", ".mp3", ".flac", ".m4a", ".webm"}
@@ -41,9 +40,7 @@ def augment_channel(samples: np.ndarray, sr: int, rng: np.random.Generator) -> n
 
     # 35% chance: narrowband telephony/WhatsApp bandpass (300 - 3400 Hz)
     if rng.random() < 0.35:
-        nyq = sr / 2.0
-        sos = butter(3, [300.0 / nyq, 3400.0 / nyq], btype="band", output="sos")
-        x = sosfilt(sos, x).astype(np.float32)
+        x = bandpass_filter(x, sr=sr, low=300.0, high=3400.0)
 
     # 50% chance: additive background noise at 12-30 dB SNR
     if rng.random() < 0.50:

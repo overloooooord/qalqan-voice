@@ -10,13 +10,37 @@ Produces realistic 16 kHz audio waveforms modeling the physical contrasts betwee
 from __future__ import annotations
 
 import numpy as np
-from scipy.signal import butter, sosfilt
+
+
+def bandpass_filter(sig: np.ndarray, sr: int, low: float, high: float) -> np.ndarray:
+    """Zero-phase pure-NumPy FFT bandpass filter with smooth cosine roll-off."""
+    x = np.asarray(sig, dtype=np.float64)
+    n = x.size
+    if n == 0:
+        return x.astype(np.float32)
+    freqs = np.fft.rfftfreq(n, d=1.0 / float(sr))
+    spec = np.fft.rfft(x)
+
+    trans_lo = max(20.0, low * 0.12)
+    trans_hi = max(40.0, (high - low) * 0.08)
+
+    mask = np.zeros_like(freqs, dtype=np.float64)
+    pass_idx = (freqs >= low) & (freqs <= high)
+    mask[pass_idx] = 1.0
+
+    lo_ramp = (freqs >= max(0.0, low - trans_lo)) & (freqs < low)
+    if np.any(lo_ramp):
+        mask[lo_ramp] = 0.5 * (1.0 - np.cos(np.pi * (freqs[lo_ramp] - (low - trans_lo)) / max(trans_lo, 1e-6)))
+
+    hi_ramp = (freqs > high) & (freqs <= high + trans_hi)
+    if np.any(hi_ramp):
+        mask[hi_ramp] = 0.5 * (1.0 + np.cos(np.pi * (freqs[hi_ramp] - high) / max(trans_hi, 1e-6)))
+
+    return np.fft.irfft(spec * mask, n=n).astype(np.float32)
 
 
 def _bandpass(sig: np.ndarray, sr: int, low: float, high: float, order: int = 3) -> np.ndarray:
-    nyq = sr / 2.0
-    sos = butter(order, [max(low / nyq, 1e-4), min(high / nyq, 0.999)], btype="band", output="sos")
-    return sosfilt(sos, sig).astype(np.float32)
+    return bandpass_filter(sig, sr, low, high)
 
 
 def generate_synthetic_voice_sample(duration_sec: float = 4.0, sr: int = 16000, seed: int = 42) -> np.ndarray:

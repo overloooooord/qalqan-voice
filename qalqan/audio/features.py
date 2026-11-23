@@ -16,8 +16,47 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.fft import dct
-from scipy.signal import stft
+from numpy.lib.stride_tricks import sliding_window_view
+
+
+_DCT_CACHE: dict[int, np.ndarray] = {}
+
+
+def _dct_type2_ortho(x: np.ndarray) -> np.ndarray:
+    """Pure-NumPy orthonormal Type-II DCT along axis=0 (matches scipy.fft.dct(norm='ortho'))."""
+    n = x.shape[0]
+    basis = _DCT_CACHE.get(n)
+    if basis is None:
+        k = np.arange(n, dtype=np.float64)[:, None]
+        i = np.arange(n, dtype=np.float64)[None, :]
+        basis = np.cos(np.pi * (i + 0.5) * k / n)
+        basis[0, :] *= np.sqrt(1.0 / n)
+        basis[1:, :] *= np.sqrt(2.0 / n)
+        basis = basis.astype(np.float32)
+        _DCT_CACHE[n] = basis
+    return basis @ x.astype(np.float32, copy=False)
+
+
+def _stft_magnitude(
+    samples: np.ndarray,
+    sr: int,
+    n_fft: int = 512,
+    win_length: int = 400,
+    hop_length: int = 160,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Pure-NumPy Hann-windowed STFT magnitude (matches scipy.signal.stft scaling)."""
+    pad = win_length // 2
+    padded = np.pad(samples.astype(np.float32, copy=False), (pad, pad), mode="constant")
+    if padded.size < win_length:
+        padded = np.pad(padded, (0, win_length - padded.size), mode="constant")
+
+    frames = sliding_window_view(padded, win_length)[::hop_length]
+    window = np.hanning(win_length).astype(np.float32)
+    win_sum = float(np.sum(window)) + 1e-12
+    windowed = frames * window[None, :]
+    spec = np.fft.rfft(windowed, n=n_fft, axis=1) / win_sum
+    freqs = np.fft.rfftfreq(n_fft, d=1.0 / float(sr)).astype(np.float32)
+    return freqs, np.abs(spec).T.astype(np.float32)
 
 
 @dataclass
@@ -182,17 +221,13 @@ def extract_acoustic_features(samples: np.ndarray, sr: int = 16000) -> AcousticF
     win_length = 400  # 25 ms @ 16 kHz
     hop_length = 160  # 10 ms @ 16 kHz
 
-    freqs, _times, zxx = stft(
+    freqs, mag = _stft_magnitude(
         samples,
-        fs=sr,
-        window="hann",
-        nperseg=win_length,
-        noverlap=win_length - hop_length,
-        nfft=n_fft,
-        boundary="zeros",
-        padded=True,
+        sr=sr,
+        n_fft=n_fft,
+        win_length=win_length,
+        hop_length=hop_length,
     )
-    mag = np.abs(zxx).astype(np.float32)
     power = mag * mag + 1e-10
 
     # 1. Log-Mel Spectrogram (64 bands)
@@ -203,7 +238,7 @@ def extract_acoustic_features(samples: np.ndarray, sr: int = 16000) -> AcousticF
     # 2. LFCC (20 static + 20 delta + 20 delta-delta = 60 dims)
     lin_fb = _build_triangular_filterbank(n_fft, sr, n_filters=40, fmin=0.0, fmax=sr / 2.0, scale="linear")
     lin_log = np.log(np.maximum(lin_fb @ power, 1e-10))
-    lfcc_static = dct(lin_log, type=2, axis=0, norm="ortho")[:20, :].astype(np.float32)
+    lfcc_static = _dct_type2_ortho(lin_log)[:20, :].astype(np.float32)
     lfcc_delta = _compute_deltas(lfcc_static, width=2)
     lfcc_dd = _compute_deltas(lfcc_delta, width=2)
     lfcc = np.concatenate([lfcc_static, lfcc_delta, lfcc_dd], axis=0)

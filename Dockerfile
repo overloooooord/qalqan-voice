@@ -11,8 +11,8 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY requirements.txt pyproject.toml ./
-RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
+COPY requirements.txt requirements-full.txt pyproject.toml ./
+RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-full.txt
 
 COPY qalqan ./qalqan
 COPY scripts ./scripts

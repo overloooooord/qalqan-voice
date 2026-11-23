@@ -123,6 +123,12 @@
   let scriptNode = null;
   let analyser = null;
   let ws = null;
+  let wsReady = false;
+  let httpMicTimer = null;
+  let micRing = [];
+  let micRingLen = 0;
+  let httpInFlight = false;
+  let serverFfmpegAvailable = true;
   let animFrameId = null;
   let lastSpecMatrix = null;
 
@@ -293,10 +299,11 @@
       const res = await fetch("/api/v1/health");
       if (!res.ok) throw new Error("offline");
       const h = await res.json();
+      serverFfmpegAvailable = Boolean(h.ffmpeg_available);
       $("healthTag").textContent = "ONLINE";
       $("engineTag").textContent = h.model_loaded ? "HYBRID LCNN" : "PHYSICS DSP";
       $("healthMeta").textContent =
-        `FastAPI v${h.version} · ${h.sample_rate / 1000} kHz · engine: ${h.engine_mode} · FFmpeg: ${h.ffmpeg_available ? "OK" : "WAV only"}`;
+        `FastAPI v${h.version} · ${h.sample_rate / 1000} kHz · engine: ${h.engine_mode} · decode: ${h.ffmpeg_available ? "FFmpeg" : "WebAudio+WAV"}`;
     } catch (_) {
       $("healthTag").textContent = "OFFLINE";
       $("healthMeta").textContent = "API недоступен";
@@ -326,14 +333,70 @@
     }
   }
 
+  function encodeWavBlob(float32Samples, sampleRate) {
+    const n = float32Samples.length;
+    const buf = new ArrayBuffer(44 + n * 2);
+    const v = new DataView(buf);
+    const str = (off, s) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
+    str(0, "RIFF");
+    v.setUint32(4, 36 + n * 2, true);
+    str(8, "WAVE");
+    str(12, "fmt ");
+    v.setUint32(16, 16, true);
+    v.setUint16(20, 1, true);
+    v.setUint16(22, 1, true);
+    v.setUint32(24, sampleRate, true);
+    v.setUint32(28, sampleRate * 2, true);
+    v.setUint16(32, 2, true);
+    v.setUint16(34, 16, true);
+    str(36, "data");
+    v.setUint32(40, n * 2, true);
+    for (let i = 0; i < n; i++) {
+      const s = Math.max(-1, Math.min(1, float32Samples[i]));
+      v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+    return new Blob([buf], { type: "audio/wav" });
+  }
+
+  async function transcodeToWavInBrowser(file) {
+    const arrBuf = await file.arrayBuffer();
+    const tmpCtx = new (window.AudioContext || window.webkitAudioContext)();
+    try {
+      const decoded = await tmpCtx.decodeAudioData(arrBuf.slice(0));
+      const targetSr = 16000;
+      const len = Math.max(1, Math.ceil(decoded.duration * targetSr));
+      const offline = new OfflineAudioContext(1, len, targetSr);
+      const src = offline.createBufferSource();
+      src.buffer = decoded;
+      src.connect(offline.destination);
+      src.start(0);
+      const rendered = await offline.startRendering();
+      const wavBlob = encodeWavBlob(rendered.getChannelData(0), targetSr);
+      const base = file.name.replace(/\.[^.]+$/, "") || "audio";
+      return new File([wavBlob], `${base}.wav`, { type: "audio/wav" });
+    } finally {
+      tmpCtx.close();
+    }
+  }
+
   async function uploadAudioFile(file) {
     if (!file) return;
     $("verdictTitle").textContent = t("analyzing");
     $("modeFoot").textContent = t("mode_file");
 
-    const fd = new FormData();
-    fd.append("file", file);
     try {
+      let uploadFile = file;
+      const isWav = /\.wav$/i.test(file.name) || file.type === "audio/wav";
+      // Serverless environments (e.g. Vercel) lack ffmpeg; decode OGG/MP3/M4A in-browser cleanly
+      if (!serverFfmpegAvailable && !isWav) {
+        try {
+          uploadFile = await transcodeToWavInBrowser(file);
+        } catch (_) {
+          // Fall back to sending original file directly
+        }
+      }
+      const fd = new FormData();
+      fd.append("file", uploadFile);
       const res = await fetch(`/api/v1/analyze?lang=${encodeURIComponent(currentLang)}`, {
         method: "POST",
         body: fd,
@@ -397,25 +460,84 @@
       analyser.fftSize = 512;
       scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
 
+      wsReady = false;
+      micRing = [];
+      micRingLen = 0;
+
       const proto = location.protocol === "https:" ? "wss:" : "ws:";
-      ws = new WebSocket(
-        `${proto}//${location.host}/ws/stream?lang=${encodeURIComponent(currentLang)}&sample_rate=${audioCtx.sampleRate}`
-      );
-      ws.onmessage = (evt) => {
-        const msg = JSON.parse(evt.data);
-        if (msg.type === "verdict") {
-          renderVerdict(msg);
-          refreshHistory();
-        } else if (msg.type === "buffering") {
-          $("modeFoot").textContent = `${t("mode_mic")} · ${msg.buffered_sec}s`;
+      try {
+        ws = new WebSocket(
+          `${proto}//${location.host}/ws/stream?lang=${encodeURIComponent(currentLang)}&sample_rate=${audioCtx.sampleRate}`
+        );
+        ws.onopen = () => {
+          wsReady = true;
+          $("modeFoot").textContent = t("mode_mic");
+        };
+        ws.onmessage = (evt) => {
+          const msg = JSON.parse(evt.data);
+          if (msg.type === "verdict") {
+            renderVerdict(msg);
+            refreshHistory();
+          } else if (msg.type === "buffering") {
+            $("modeFoot").textContent = `${t("mode_mic")} · ${msg.buffered_sec}s`;
+          }
+        };
+        ws.onerror = () => { wsReady = false; };
+        ws.onclose = () => { wsReady = false; };
+      } catch (_) {
+        ws = null;
+        wsReady = false;
+      }
+
+      const maxRingSamples = audioCtx.sampleRate * 3;
+      scriptNode.onaudioprocess = (ev) => {
+        const input = ev.inputBuffer.getChannelData(0);
+        if (ws && wsReady && ws.readyState === WebSocket.OPEN) {
+          ws.send(floatTo16BitPCM(input));
+        } else {
+          // Buffer for HTTP chunked fallback (Vercel serverless where WS isn't supported)
+          const copy = new Float32Array(input.length);
+          copy.set(input);
+          micRing.push(copy);
+          micRingLen += copy.length;
+          while (micRingLen > maxRingSamples && micRing.length > 1) {
+            micRingLen -= micRing.shift().length;
+          }
         }
       };
 
-      scriptNode.onaudioprocess = (ev) => {
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        const input = ev.inputBuffer.getChannelData(0);
-        ws.send(floatTo16BitPCM(input));
-      };
+      // HTTP chunk fallback loop (only active if WS is not connected)
+      httpMicTimer = setInterval(async () => {
+        if (!isRecording || wsReady || httpInFlight || !audioCtx) return;
+        const minSamples = Math.floor(audioCtx.sampleRate * 1.2);
+        if (micRingLen < minSamples) return;
+        httpInFlight = true;
+        try {
+          const merged = new Float32Array(micRingLen);
+          let off = 0;
+          for (const chunk of micRing) {
+            merged.set(chunk, off);
+            off += chunk.length;
+          }
+          const blob = encodeWavBlob(merged, audioCtx.sampleRate);
+          const fd = new FormData();
+          fd.append("file", blob, "microphone.wav");
+          const res = await fetch(`/api/v1/analyze?lang=${encodeURIComponent(currentLang)}`, {
+            method: "POST",
+            body: fd,
+          });
+          if (res.ok) {
+            const data = await res.json();
+            renderVerdict(data);
+            refreshHistory();
+            $("modeFoot").textContent = "режим: микрофон (HTTP)";
+          }
+        } catch (_) {
+          // Ignore transient network errors
+        } finally {
+          httpInFlight = false;
+        }
+      }, 1800);
 
       src.connect(analyser);
       analyser.connect(scriptNode);
@@ -435,6 +557,10 @@
 
   function stopMic() {
     isRecording = false;
+    wsReady = false;
+    if (httpMicTimer) { clearInterval(httpMicTimer); httpMicTimer = null; }
+    micRing = [];
+    micRingLen = 0;
     if (animFrameId) cancelAnimationFrame(animFrameId);
     if (scriptNode) { scriptNode.disconnect(); scriptNode = null; }
     if (analyser) { analyser.disconnect(); analyser = null; }

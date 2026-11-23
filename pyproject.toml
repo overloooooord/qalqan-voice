@@ -9,23 +9,34 @@ description = "Real-time AI voice deepfake detector for Kazakh, Russian, and cod
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
+# Core web/API runtime stays lightweight (~78 MB unzipped) for serverless deployment (Vercel)
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "python-multipart>=0.0.9",
     "pydantic>=2.7.0",
     "numpy>=1.26.0",
-    "scipy>=1.13.0",
-    "torch>=2.2.0",
-    "aiogram>=3.10.0",
 ]
 
 [project.optional-dependencies]
+ml = [
+    "torch>=2.2.0",
+]
+bot = [
+    "aiogram>=3.10.0",
+]
+full = [
+    "torch>=2.2.0",
+    "aiogram>=3.10.0",
+]
 dev = [
+    "torch>=2.2.0",
+    "aiogram>=3.10.0",
     "pytest>=8.0.0",
     "httpx>=0.27.0",
 ]
 onnx = [
+    "torch>=2.2.0",
     "onnx>=1.16.0",
     "onnxruntime>=1.18.0",
 ]
@@ -34,6 +45,9 @@ onnx = [
 qalqan-api = "qalqan.api.app:main"
 qalqan-bot = "qalqan.bot.telegram_bot:main"
 qalqan-train = "qalqan.ml.train:main"
+
+[tool.vercel]
+entrypoint = "qalqan.api:app"
 
 [tool.setuptools.packages.find]
 include = ["qalqan*", "scripts*"]

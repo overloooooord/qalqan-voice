@@ -66,7 +66,12 @@ Requires **Python 3.11+** and **FFmpeg** (for `.ogg` / `.mp3` / `.webm` / `.m4a`
 git clone https://github.com/overloooooord/qalqan-voice.git
 cd qalqan-voice
 python3 -m venv .venv && source .venv/bin/activate
+
+# Lightweight Web Dashboard + REST/WS API (pure NumPy, ~78 MB — Vercel-ready)
 pip install -r requirements.txt
+
+# Or full stack (adds PyTorch LCNN training/inference + aiogram Telegram bot + pytest)
+pip install -r requirements-full.txt
 ```
 
 ### 2. Launch the Web Dashboard & API

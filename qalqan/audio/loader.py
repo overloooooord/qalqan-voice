@@ -1,9 +1,8 @@
-"""Audio decoding and normalization (WAV native + FFmpeg fallback for OGG/MP3/WebM/M4A)."""
+"""Audio decoding and normalization (pure-NumPy WAV native + FFmpeg fallback for OGG/MP3/WebM/M4A)."""
 
 from __future__ import annotations
 
 import io
-import math
 import shutil
 import subprocess
 import wave
@@ -11,8 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from scipy.io import wavfile
-from scipy.signal import resample_poly
 
 
 class AudioLoadError(ValueError):
@@ -30,12 +27,21 @@ class LoadedAudio:
 
 
 def _resample(samples: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
+    """Resample mono float32 waveform using pure-NumPy band-limited FFT resampling."""
     if orig_sr == target_sr or samples.size == 0:
         return samples.astype(np.float32, copy=False)
-    gcd = math.gcd(orig_sr, target_sr)
-    up = target_sr // gcd
-    down = orig_sr // gcd
-    resampled = resample_poly(samples.astype(np.float64), up, down)
+    n_in = samples.size
+    n_out = max(1, int(round(n_in * float(target_sr) / float(orig_sr))))
+    if n_out == n_in:
+        return samples.astype(np.float32, copy=False)
+
+    # Exact FFT-domain resampling (band-limited, zero scipy dependency)
+    spec = np.fft.rfft(samples.astype(np.float64))
+    n_out_bins = n_out // 2 + 1
+    out_spec = np.zeros(n_out_bins, dtype=np.complex128)
+    copy_bins = min(spec.size, n_out_bins)
+    out_spec[:copy_bins] = spec[:copy_bins]
+    resampled = np.fft.irfft(out_spec, n=n_out) * (float(n_out) / float(n_in))
     return resampled.astype(np.float32)
 
 
@@ -46,14 +52,12 @@ def _normalize_waveform(samples: np.ndarray, target_sr: int, max_seconds: float)
     if samples.size == 0:
         raise AudioLoadError("Audio stream contains zero samples.")
 
-    # Replace NaN/Inf defensively
     if not np.all(np.isfinite(samples)):
         samples = np.nan_to_num(samples, nan=0.0, posinf=1.0, neginf=-1.0)
 
     # Remove DC bias
     samples = samples - float(np.mean(samples))
 
-    # Truncate to max duration
     max_samples = int(target_sr * max_seconds)
     if max_samples > 0 and samples.size > max_samples:
         samples = samples[:max_samples]
@@ -68,24 +72,40 @@ def _try_decode_wav(data: bytes, target_sr: int, max_seconds: float) -> LoadedAu
     if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
         return None
     try:
-        sr, raw = wavfile.read(io.BytesIO(data))
+        with wave.open(io.BytesIO(data), "rb") as wf:
+            n_channels = wf.getnchannels()
+            sampwidth = wf.getsampwidth()
+            sr = wf.getframerate()
+            raw_frames = wf.readframes(wf.getnframes())
     except Exception:
         return None
 
-    if raw.dtype == np.int16:
-        samples = raw.astype(np.float32) / 32768.0
-    elif raw.dtype == np.int32:
-        samples = raw.astype(np.float32) / 2147483648.0
-    elif raw.dtype == np.uint8:
-        samples = (raw.astype(np.float32) - 128.0) / 128.0
-    elif np.issubdtype(raw.dtype, np.floating):
-        samples = raw.astype(np.float32)
+    if not raw_frames or sr <= 0:
+        return None
+
+    if sampwidth == 1:
+        arr = (np.frombuffer(raw_frames, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+    elif sampwidth == 2:
+        arr = np.frombuffer(raw_frames, dtype="<i2").astype(np.float32) / 32768.0
+    elif sampwidth == 3:
+        raw_u8 = np.frombuffer(raw_frames, dtype=np.uint8).reshape(-1, 3)
+        signed = (
+            raw_u8[:, 0].astype(np.int32)
+            | (raw_u8[:, 1].astype(np.int32) << 8)
+            | (raw_u8[:, 2].astype(np.int32) << 16)
+        )
+        signed = np.where(signed & 0x800000, signed - 0x1000000, signed)
+        arr = signed.astype(np.float32) / 8388608.0
+    elif sampwidth == 4:
+        arr = np.frombuffer(raw_frames, dtype="<i4").astype(np.float32) / 2147483648.0
     else:
         return None
 
-    if samples.ndim > 1:
-        samples = samples.mean(axis=-1)
-    samples = _resample(samples, int(sr), target_sr)
+    if n_channels > 1:
+        usable = (arr.size // n_channels) * n_channels
+        arr = arr[:usable].reshape(-1, n_channels).mean(axis=1)
+
+    samples = _resample(arr, int(sr), target_sr)
     samples = _normalize_waveform(samples, target_sr, max_seconds)
     return LoadedAudio(
         samples=samples,
@@ -99,7 +119,8 @@ def _decode_with_ffmpeg(data: bytes, target_sr: int, max_seconds: float, fmt_hin
     ffmpeg_bin = shutil.which("ffmpeg")
     if not ffmpeg_bin:
         raise AudioLoadError(
-            "Unsupported non-WAV format and 'ffmpeg' is not available on PATH."
+            "Unsupported non-WAV format and 'ffmpeg' is not available on PATH. "
+            "Upload a WAV file or use the Web Dashboard (which decodes OGG/MP3 in-browser)."
         )
 
     cmd = [

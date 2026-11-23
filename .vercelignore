@@ -1,0 +1,14 @@
+# Keep Vercel Serverless Function bundle small and fast
+docs/
+tests/
+scripts/
+models/
+.github/
+Dockerfile
+docker-compose.yml
+requirements-full.txt
+.pytest_cache/
+__pycache__/
+*.pyc
+.venv/
+venv/

@@ -9,12 +9,10 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 import numpy as np
-import torch
 
 from qalqan.audio.features import AcousticFeatures, extract_acoustic_features
 from qalqan.audio.loader import AudioLoadError, LoadedAudio, load_audio_bytes, load_audio_pcm16
 from qalqan.config import Settings
-from qalqan.ml.model import QalqanLCNN, load_checkpoint
 
 logger = logging.getLogger(__name__)
 
@@ -86,17 +84,30 @@ class VoiceDeepfakeDetector:
 
     def __init__(self, settings: Settings | None = None, device: str = "cpu"):
         self.settings = settings or Settings.from_env()
-        self.device = torch.device(device)
-        self.model: QalqanLCNN | None = None
+        self.device_name = device
+        self.model: Any = None
         self.model_meta: dict[str, Any] = {}
 
         if self.settings.model_path and self.settings.model_path.is_file():
             try:
-                self.model, self.model_meta = load_checkpoint(self.settings.model_path, device=self.device)
+                import torch
+                from qalqan.ml.model import load_checkpoint
+
+                self.model, self.model_meta = load_checkpoint(
+                    self.settings.model_path, device=torch.device(device)
+                )
                 logger.info("Loaded QalqanLCNN checkpoint from %s", self.settings.model_path)
+            except ImportError:
+                logger.info(
+                    "PyTorch is not installed in this runtime; running in lightweight acoustic-physics mode."
+                )
+                self.model = None
             except Exception as exc:  # pragma: no cover - defensive fallback
-                logger.warning("Failed to load checkpoint %s (%s); falling back to acoustic-physics mode.",
-                               self.settings.model_path, exc)
+                logger.warning(
+                    "Failed to load checkpoint %s (%s); falling back to acoustic-physics mode.",
+                    self.settings.model_path,
+                    exc,
+                )
                 self.model = None
 
     @property
@@ -126,15 +137,18 @@ class VoiceDeepfakeDetector:
 
     def _neural_probability(self, feat: AcousticFeatures) -> float:
         """Run PyTorch LCNN inference on LFCC + physics vector."""
+        import torch
+
         assert self.model is not None
+        device = torch.device(self.device_name)
         lfcc = feat.lfcc
         # Standardize LFCC per-utterance (CMVN) for channel/microphone invariance
         mean = lfcc.mean(axis=1, keepdims=True)
         std = lfcc.std(axis=1, keepdims=True) + 1e-6
         lfcc_norm = (lfcc - mean) / std
 
-        lfcc_t = torch.from_numpy(lfcc_norm).unsqueeze(0).unsqueeze(0).to(self.device)
-        phys_t = torch.from_numpy(feat.physics_vector()).unsqueeze(0).to(self.device)
+        lfcc_t = torch.from_numpy(lfcc_norm).unsqueeze(0).unsqueeze(0).to(device)
+        phys_t = torch.from_numpy(feat.physics_vector()).unsqueeze(0).to(device)
 
         with torch.inference_mode():
             logit = self.model(lfcc_t, phys_t)
